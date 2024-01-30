@@ -2,6 +2,7 @@
 
 import re
 import editdistance
+from sentence_transformers import SentenceTransformer
 
 sentiment_word_list = ['positive', 'negative', 'neutral']
 aspect_cate_list = ['location general',
@@ -15,10 +16,59 @@ aspect_cate_list = ['location general',
  'drinks quality',
  'drinks style_options',
  'restaurant general',
- 'food style_options']
+ 'food style_options',
+  'facility',
+  'amenity',
+  'service',
+  'experience',
+  'branding',
+  'loyalty',
+]
+
+def replace_special_symbols(input_string):
+    # Define a regular expression pattern to match special symbols
+    pattern = re.compile(r'[^a-zA-Z0-9\s]')
+
+    # Replace special symbols with a dot
+    result_string = re.sub(pattern, '', input_string)
+
+    return result_string
+
+def resolve_incomplete_sentiment(sentiment):
+
+    for s in sentiment_word_list:
+        if sentiment in s and sentiment != s:
+            return s
+
+    return 
+
+def post_process_spans_extraction(triplets, type_ext):
+  tmp = []
+  for triplet in triplets:
+    if type_ext == 'pred':
+      print('Sentence:', triplet)
+    if triplet[0] == '' or \
+      (triplet[-2] not in aspect_cate_list) or \
+      (triplet[-1] not in sentiment_word_list):
+      tmp.append(['', '', ''])
+    else:
+
+      # Replace special symbols with a non-space
+      triplet[-1] = replace_special_symbols(triplet[-1])
+
+      # Replace imcomplete sentiment with fully form sentiment
+      triplet[-2] = resolve_incomplete_sentiment(triplet[-2])
+
+      tmp.append(triplet)
+    # if (triplet[-1] not in aspect_cate_list) or (triplet[-2] not in sentiment_word_list):
+    #   count_error += 1
+    #   triplet = ['', '', '']
+  return tmp
 
 
-def extract_spans_extraction(task, seq):
+
+
+def extract_spans_extraction(task, seq, type_ext):
     extractions = []
     if task == 'uabsa' and seq.lower() == 'none':
         return []
@@ -34,13 +84,30 @@ def extract_spans_extraction(task, seq):
                 extractions.append((a, b))
         elif task in ['tasd', 'aste']:
             all_pt = seq.split('; ')
+            # print('Type of extraction: ', type_ext)
             for pt in all_pt:
+
+                # print('Aspect list: ', pt)
                 pt = pt[1:-1]
+                # print('New aspect list: ', pt)
                 try:
-                    a, b, c = pt.split(', ')
+                    ptl = pt.split(', ')
+                    if len(ptl) > 1:
+                      a, b, c = '', '', ''
+                      if ptl[-2].lower() in aspect_cate_list and len(ptl) > 3:
+                          a, b, c = ', '.join(ptl[:-2]), ptl[-2], ptl[-1]
+                      else:
+                          a, b, c = ptl
+                      a, b, c = a.lower(), b.lower(), c.lower()
+                    else:
+                      raise ValueError('')
                 except ValueError:
                     a, b, c = '', '', ''
-                extractions.append((a, b, c))            
+                # print('Result of extraction: ', a + ',' + b + ',' + c)
+                extractions.append([a, b, c])
+
+        # Post-process extractions
+        extractions = post_process_spans_extraction(extractions, type_ext)
         return extractions
 
 
@@ -295,33 +362,68 @@ def fix_pred_with_editdistance(all_predictions, sents, task):
 
 def compute_f1_scores(pred_pt, gold_pt):
     """
-    Function to compute F1 scores with pred and gold pairs/triplets
+    Function to compute F1 scores with pred and gold quads
     The input needs to be already processed
     """
-    # number of true postive, gold standard, predicted aspect terms
-    n_tp, n_gold, n_pred = 0, 0, 0
-
+    # number of true postive, gold standard, predictions
+    n_tp, n_gold, n_pred, n_gold_null, n_pred_null = 0, 0, 0, 0, 0
+    sbert_model = SentenceTransformer('bert-base-nli-mean-tokens')
     for i in range(len(pred_pt)):
-        n_gold += len(gold_pt[i])
-        n_pred += len(pred_pt[i])
+            # n_gold += len(gold_pt[i])
+            # n_pred += len(pred_pt[i])
 
-        for t in pred_pt[i]:
-            if t in gold_pt[i]:
-                n_tp += 1
+            # for t in pred_pt[i][]:
+            #     if t in gold_pt[i]:
+            #         n_tp += 1
 
+
+
+            ####### CONFIG #######
+            n_gold += len(gold_pt[i])
+            n_gold_null += length_of_null_quads(gold_pt[i])
+
+            n_pred += len(pred_pt[i])
+            n_pred_null += length_of_null_quads(pred_pt[i])
+
+            for p, g in zip(pred_pt[i], gold_pt[i]):
+                  if p[0] != '' and g[0] != '':
+
+                      if p == g:
+                          n_tp += 1
+                      else:
+                          # Similarity between gold and pred by bert embedding
+                          encode_gold = sbert_model.encode(g[0])
+                          encode_pred = sbert_model.encode(p[0])
+
+                          # Define cosine similarity
+                          cos = torch.nn.CosineSimilarity(dim = 0, eps=1e-6)
+                          sim = cos(torch.Tensor(encode_gold), torch.Tensor(encode_pred)).item()
+
+                          if sim >= 0.45 and p[1:]== g[1:]:
+                              n_tp += 1
+
+            ####### ........ #######
+
+
+
+
+    n_gold = n_gold - n_gold_null
+    n_pred = n_pred - n_pred_null
+
+    print(f"number of gold spans: {n_gold}, predicted spans: {n_pred}, hit: {n_tp}")
     precision = float(n_tp) / float(n_pred) if n_pred != 0 else 0
     recall = float(n_tp) / float(n_gold) if n_gold != 0 else 0
     f1 = 2 * precision * recall / (precision + recall) if precision != 0 or recall != 0 else 0
     scores = {'precision': precision, 'recall': recall, 'f1': f1}
 
-    return scores
+    return scores, n_pred_null
 
 
 def compute_scores(pred_seqs, gold_seqs, sents, io_format, task):
     """
     compute metrics for multiple tasks
     """
-    assert len(pred_seqs) == len(gold_seqs) 
+    assert len(pred_seqs) == len(gold_seqs)
     num_samples = len(gold_seqs)
 
     all_labels, all_predictions = [], []
@@ -331,20 +433,22 @@ def compute_scores(pred_seqs, gold_seqs, sents, io_format, task):
             gold_list = extract_spans_annotation(task, gold_seqs[i])
             pred_list = extract_spans_annotation(task, pred_seqs[i])
         elif io_format == 'extraction':
-            gold_list = extract_spans_extraction(task, gold_seqs[i])
-            pred_list = extract_spans_extraction(task, pred_seqs[i])
+            gold_list = extract_spans_extraction(task, gold_seqs[i], 'gold')
+            print('Original pred list: ', pred_seqs[i])
+            pred_list = extract_spans_extraction(task, pred_seqs[i], 'pred')
+            print()
 
         all_labels.append(gold_list)
         all_predictions.append(pred_list)
-    
-    print("\nResults of raw output")
-    raw_scores = compute_f1_scores(all_predictions, all_labels)
-    print(raw_scores)
 
-    # fix the issues due to generation
-    all_predictions_fixed = fix_pred_with_editdistance(all_predictions, sents, task)
-    print("\nResults of fixed output")
-    fixed_scores = compute_f1_scores(all_predictions_fixed, all_labels)
-    print(fixed_scores)
-    
-    return raw_scores, fixed_scores, all_labels, all_predictions, all_predictions_fixed
+    print("\nResults of raw output")
+    raw_scores, n_pred_null = compute_f1_scores(all_predictions, all_labels)
+
+    print('Number of predicted null triplets: ', n_pred_null)
+
+    # # fix the issues due to generation
+    # all_predictions_fixed = fix_pred_with_editdistance(all_predictions, sents, task)
+    # print("\nResults of fixed output")
+    # fixed_scores = compute_f1_scores(all_predictions_fixed, all_labels)
+    # print(fixed_scores)
+    return raw_scores, all_labels, all_predictions
