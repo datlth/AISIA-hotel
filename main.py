@@ -236,9 +236,8 @@ def evaluate(data_loader, model, paradigm, task, sents):
         outputs.extend(dec)
         targets.extend(target)
 
-    raw_scores, fixed_scores, all_labels, all_preds, all_preds_fixed = compute_scores(outputs, targets, sents, paradigm, task)
-    results = {'raw_scores': raw_scores, 'fixed_scores': fixed_scores, 'labels': all_labels,
-               'preds': all_preds, 'preds_fixed': all_preds_fixed}
+    raw_scores, all_labels, all_preds = compute_scores(outputs, targets, sents, paradigm, task)
+    results = {'raw_scores': raw_scores, 'labels': all_labels, 'preds': all_preds}
     # pickle.dump(results, open(f"{args.output_dir}/results-{args.task}-{args.dataset}-{args.paradigm}.pickle", 'wb'))
 
     return raw_scores, all_labels, all_predictions
