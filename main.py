@@ -241,7 +241,7 @@ def evaluate(data_loader, model, paradigm, task, sents):
                'preds': all_preds, 'preds_fixed': all_preds_fixed}
     # pickle.dump(results, open(f"{args.output_dir}/results-{args.task}-{args.dataset}-{args.paradigm}.pickle", 'wb'))
 
-    return raw_scores, fixed_scores
+    return raw_scores, all_labels, all_predictions
 
 
 # initialization
@@ -288,6 +288,7 @@ if args.do_train:
 
     # save the final model
     model.model.save_pretrained(args.output_dir)
+    tokenizer.save_pretrained(args.output_dir)
 
     print("Finish training and saving the model!")
 
